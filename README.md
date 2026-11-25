@@ -41,7 +41,7 @@ Configuration actions read and merge `bitcoin.conf`, preserving unknown keys and
 
 ## Dependencies
 
-Tor is optional. It becomes required when onion connectivity is selected or an onion peer address is configured. Its SOCKS endpoint is resolved through the StartOS bridge. Losing Tor does not change an explicit `onlynet` restriction into unrestricted networking.
+Tor is optional. It becomes required when onion connectivity is selected or an onion peer address is configured, and the version range asks for `0.4.9.17:4` or later, the first Tor with Set Onion Target. Its SOCKS endpoint is resolved through the StartOS bridge. Losing Tor does not change an explicit `onlynet` restriction into unrestricted networking.
 
 ## Network Access and Interfaces
 
@@ -54,6 +54,10 @@ StartOS controls where exported interfaces are reachable. The package keeps its 
 | I2P console (`i2p-console`) | 7070           | Assigned by StartOS     | Optional router console                                 |
 
 Private bindings without exported interfaces provide direct RPC/REST on host `rpc-local`, port 58432, whitelisted P2P on `peer-local`, port 58334, and, when enabled, ZMQ on host `zmq`: hash and raw block notifications on 38332, transaction and sequence notifications on 38333. ZMQ has no authentication and carries the node's own transactions as it broadcasts them, so it never gets an exported interface. Dependent services should resolve these through StartOS rather than inventing hostnames or assuming host ports.
+
+The package passes `-listenonion=0`, so the daemon never tries to create its own onion service through a Tor control port: the StartOS Tor service owns the onion addresses.
+
+**Onion peers have a listener of their own.** An init step asks Tor, through `tor-startos`'s `setupOnionTarget`, to forward the Peer interface's onion addresses to container port 58335 instead of 58333, and repeats the request whenever Tor is installed or updated. The `onion-relay` daemon, `socat` in the Bitcoin image, passes each connection on to Bitcoin's `127.0.0.1:58336=onion` listener. Bitcoin therefore knows those peers arrived over Tor: it advertises only its onion address to them, never the public IPv4 that `watchHosts` writes to `externalip`, and gives them the eviction protection it reserves for onion peers. Because they reach Bitcoin from loopback, a misbehaving one is disconnected without its address being discouraged, which would otherwise refuse every onion peer at once. The 58335 binding sits on the `peer` host with no exported interface, so it stays on loopback and the LXC bridge. A Tor older than `0.4.9.17:4` has no Set Onion Target and forwards to 58333, where onion peers are indistinguishable from clearnet ones.
 
 The exported RPC proxy forwards generated `rpcauth` credentials and follows cookie rotation. On pruned nodes it can fetch missing blocks from peers; archival nodes use ordinary forwarding. The public RPC interface does not expose Bitcoin's unauthenticated REST API. ZMQ listens on IPv6 with dual-stack support.
 
@@ -109,7 +113,7 @@ startos_managed_env_vars: []
 dependencies: [tor]
 interfaces:
   rpc: { type: api, port: 48332 }
-  peer: { type: p2p, port: 58333 }
+  peer: { type: p2p, port: 58333 } # onions forward to 58335 (relayed to 127.0.0.1:58336=onion); 58334 is bridge-only, no interface
   # zmq: no interface; 38332 and 38333 bridge-only, bound only when ZMQ is enabled
   i2p-console: { type: ui, port: 7070 }
 actions:
